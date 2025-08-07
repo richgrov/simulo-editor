@@ -183,3 +183,35 @@ func (d *DatabaseClient) GetProject(projectID string) (*ProjectData, error) {
 
 	return &project, nil
 }
+
+func (d *DatabaseClient) CreateProject(userID string) (*Project, error) {
+	query := "INSERT INTO projects (id, name, owner, scene) VALUES (gen_random_uuid(), $1, $2, $3) RETURNING id, name"
+
+	var project Project
+	err := d.db.QueryRow(query, "Unnamed Project", userID, "[]").Scan(&project.ID, &project.Name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create project: %w", err)
+	}
+
+	return &project, nil
+}
+
+func (d *DatabaseClient) RenameProject(projectID, userID, newName string) error {
+	query := "UPDATE projects SET name = $1 WHERE id = $2 AND owner = $3"
+
+	result, err := d.db.Exec(query, newName, projectID, userID)
+	if err != nil {
+		return fmt.Errorf("failed to rename project: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("project not found or not owned by user")
+	}
+
+	return nil
+}
