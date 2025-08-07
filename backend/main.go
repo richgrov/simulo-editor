@@ -73,6 +73,8 @@ func main() {
 	// Setup routes
 	http.HandleFunc("/project/", server.handleProjectAgent)
 	http.HandleFunc("/projects", server.handleProjects)
+	http.HandleFunc("/projects/create", server.createProject)
+	http.HandleFunc("/projects/rename", server.renameProject)
 	http.HandleFunc("/", server.handleWebSocket)
 
 	port := os.Getenv("PORT")
@@ -91,7 +93,7 @@ func (s *Server) setCORSHeaders(w http.ResponseWriter) {
 	}
 	w.Header().Set("Access-Control-Allow-Origin", cors)
 	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT")
 }
 
 func (s *Server) handleProjectAgent(w http.ResponseWriter, r *http.Request) {
@@ -274,4 +276,96 @@ func (s *Server) authorize(r *http.Request) (*supabase.User, error) {
 	}
 
 	return user, nil
+}
+
+func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
+	s.setCORSHeaders(w)
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Authorize user
+	user, err := s.authorize(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	project, err := s.db.CreateProject(user.ID)
+	if err != nil {
+		log.Printf("Failed to create project: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(project)
+}
+
+func (s *Server) renameProject(w http.ResponseWriter, r *http.Request) {
+	s.setCORSHeaders(w)
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	user, err := s.authorize(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Parse request body
+	var request struct {
+		ProjectID string `json:"project_id"`
+		Name      string `json:"name"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	// Validate input
+	if request.ProjectID == "" {
+		http.Error(w, "Project ID required", http.StatusBadRequest)
+		return
+	}
+
+	if request.Name == "" {
+		http.Error(w, "Name required", http.StatusBadRequest)
+		return
+	}
+
+	if len(request.Name) > 255 {
+		http.Error(w, "Name too long", http.StatusBadRequest)
+		return
+	}
+
+	err = s.db.RenameProject(request.ProjectID, user.ID, request.Name)
+	if err != nil {
+		if err.Error() == "project not found or not owned by user" {
+			http.Error(w, "Project not found", http.StatusNotFound)
+			return
+		}
+		log.Printf("Failed to rename project: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
 }
